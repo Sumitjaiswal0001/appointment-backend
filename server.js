@@ -18,7 +18,10 @@ connectCloudinary()
 app.use(express.json())
 app.use(cookieParser());
 
-app.use(cors())
+app.use(cors({
+  origin: "https://appointment-frontend-uq51.vercel.app",
+  credentials: true
+}))
 
 // api endpoints
 app.use("/api/user", userRouter)
