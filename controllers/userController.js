@@ -43,7 +43,7 @@ const registerUser = async (req, res) => {
         const newUser = new userModel(userData)
         const user = await newUser.save()
         const token = jwt.sign({ id: user._id }, process.env.JWT_SECRET, {
-            expiresIn: '1d',
+            expiresIn: '7d',
         });
         res.cookie("token", token, {
             httpOnly: true,
@@ -225,22 +225,22 @@ const sendResetOtp = async (req, res) => {
     }
 };
 const forgotPassword = async (req, res) => {
-  try {
-    const { email } = req.body;
+    try {
+        const { email } = req.body;
 
-    if (!email) return res.status(400).json({ success: false, message: "Email is required" });
+        if (!email) return res.status(400).json({ success: false, message: "Email is required" });
 
-    const user = await userModel.findOne({ email });
-    if (!user) return res.status(404).json({ success: false, message: "User not found" });
+        const user = await userModel.findOne({ email });
+        if (!user) return res.status(404).json({ success: false, message: "User not found" });
 
-    const otp = String(Math.floor(100000 + Math.random() * 900000));
-    const otpExpiry = Date.now() + 15 * 60 * 1000; // 15 minutes
+        const otp = String(Math.floor(100000 + Math.random() * 900000));
+        const otpExpiry = Date.now() + 15 * 60 * 1000; // 15 minutes
 
-    user.otp = otp;
-    user.otpExpiry = otpExpiry;
-    await user.save();
+        user.otp = otp;
+        user.otpExpiry = otpExpiry;
+        await user.save();
 
-     const mailOptions = {
+        const mailOptions = {
             from: process.env.SENDER_EMAIL,
             to: user.email,
             subject: "Reset Password OTP",
@@ -249,40 +249,40 @@ const forgotPassword = async (req, res) => {
 
         await transporter.sendMail(mailOptions);
 
-    res.status(200).json({ success: true, message: "OTP sent to your email" });
-  } catch (error) {
-    console.error("Forgot Password Error:", error);
-    res.status(500).json({ success: false, message: "Something went wrong" });
-  }
+        res.status(200).json({ success: true, message: "OTP sent to your email" });
+    } catch (error) {
+        console.error("Forgot Password Error:", error);
+        res.status(500).json({ success: false, message: "Something went wrong" });
+    }
 };
 
 // Reset User Password
 const resetPassword = async (req, res) => {
-  try {
-    const { email, otp, newPassword } = req.body;
+    try {
+        const { email, otp, newPassword } = req.body;
 
-    if (!email || !otp || !newPassword) {
-      return res.status(400).json({ success: false, message: "All fields are required" });
+        if (!email || !otp || !newPassword) {
+            return res.status(400).json({ success: false, message: "All fields are required" });
+        }
+
+        const user = await userModel.findOne({ email });
+        if (!user) return res.status(404).json({ success: false, message: "User not found" });
+
+        if (user.otp !== otp || user.otpExpiry < Date.now()) {
+            return res.status(400).json({ success: false, message: "Invalid or expired OTP" });
+        }
+
+        const hashedPassword = await bcrypt.hash(newPassword, 10);
+        user.password = hashedPassword;
+        user.otp = undefined;
+        user.otpExpiry = undefined;
+        await user.save();
+
+        res.status(200).json({ success: true, message: "Password reset successful" });
+    } catch (error) {
+        console.error("Reset Password Error:", error);
+        res.status(500).json({ success: false, message: "Something went wrong" });
     }
-
-    const user = await userModel.findOne({ email });
-    if (!user) return res.status(404).json({ success: false, message: "User not found" });
-
-    if (user.otp !== otp || user.otpExpiry < Date.now()) {
-      return res.status(400).json({ success: false, message: "Invalid or expired OTP" });
-    }
-
-    const hashedPassword = await bcrypt.hash(newPassword, 10);
-    user.password = hashedPassword;
-    user.otp = undefined;
-    user.otpExpiry = undefined;
-    await user.save();
-
-    res.status(200).json({ success: true, message: "Password reset successful" });
-  } catch (error) {
-    console.error("Reset Password Error:", error);
-    res.status(500).json({ success: false, message: "Something went wrong" });
-  }
 };
 // API to get user profile data
 const getProfile = async (req, res) => {
@@ -298,6 +298,7 @@ const getProfile = async (req, res) => {
         res.json({ success: false, message: error.message })
     }
 }
+
 
 // API to update user profile
 const updateProfile = async (req, res) => {
@@ -331,26 +332,9 @@ const updateProfile = async (req, res) => {
 }
 
 // API to book appointment 
-const bookAppointment = async () => {
-    // 1. Check if the user is logged in
-    if (!token) {
-      toast.warning('Login to book appointment')
-      return navigate('/login') // <-- Redirects to /login if not logged in
-    }
+const bookAppointment = async (req, res) => {
 
-    // 2. Check if the user's email is verified
-    if (!userData?.isAccountVerified) {
-      toast.error('Please verify your email before booking an appointment.')
-      return navigate('/email-verify') // <-- Redirects to /email-verify if not verified
-    }
-
-    // 3. Check if a time slot is selected
-    if (!slotTime) {
-      toast.warning('Please select a time slot')
-      return
-    }
-
-     try {
+    try {
 
         const { userId, docId, slotDate, slotTime, } = req.body
         const docData = await doctorModel.findById(docId).select("-password")
@@ -403,7 +387,7 @@ const bookAppointment = async () => {
         const sendEmail = {
             from: process.env.SENDER_EMAIL,
             to: userData.email,
-            subject: "Appointment Confirmed with Dr. ${docData.name}",
+            subject: `Appointment Confirmed with Dr. ${docData.name}`,
             text: `Dear ${userData.name},\n\nYour appointment with Dr. ${docData.name} is confirmed on ${slotDate.replace(/_/g, '/')} at ${slotTime}.\n\nThanks,\nTeam Appointment pro.`
 
         };
@@ -417,7 +401,10 @@ const bookAppointment = async () => {
         res.json({ success: false, message: error.message })
     }
 
-  }
+}
+
+
+   
 
 // API to cancel appointment
 const cancelAppointment = async (req, res) => {
