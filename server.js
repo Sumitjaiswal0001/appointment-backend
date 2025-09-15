@@ -19,6 +19,7 @@ connectCloudinary();
 // List of allowed frontend URLs
 const allowedOrigins = [
   'https://appointment-frontend-kappa.vercel.app',
+  'https://appointment-admin-gamma.vercel.app',
   // You can add other URLs here, like your local development environment
   'http://localhost:3000',
   'http://localhost:5173' 
