@@ -4,8 +4,15 @@ import validator from "validator";
 import userModel from "../models/userModel.js";
 import doctorModel from "../models/doctorModel.js";
 import appointmentModel from "../models/appointmentModel.js";
-import { v2 as cloudinary } from 'cloudinary'
+import { v2 as cloudinary } from 'cloudinary';
 import transporter from "../config/nodemailer.js";
+
+// Common cookie configurations for cross-site cookie usage (Vercel + Render)
+const cookieOptions = {
+    httpOnly: true,
+    secure: true, // Must be true for sameSite: 'none'
+    sameSite: 'none', // Crucial to allow cookies between frontend and backend on different domains
+};
 
 // API to register user
 const registerUser = async (req, res) => {
@@ -50,12 +57,16 @@ const registerUser = async (req, res) => {
             expiresIn: '7d',
         });
 
-        // 3. Store the Refresh Token in a secure, httpOnly cookie
+        // 3. Store the Access Token in a short-lived cookie for security
+        res.cookie("token", accessToken, {
+            ...cookieOptions,
+            maxAge: 15 * 60 * 1000, // 15 mins
+        });
+
+        // 4. Store the Refresh Token in a secure, httpOnly cookie
         res.cookie("refreshToken", refreshToken, {
-            httpOnly: true,
-            secure: process.env.NODE_ENV === "production",
-            sameSite: process.env.NODE_ENV === "production" ? "none" : "strict",
-            maxAge: 7 * 24 * 60 * 60 * 1000,
+            ...cookieOptions,
+            maxAge: 7 * 24 * 60 * 60 * 1000, // 7 days
         });
 
         // Sending welcome email
@@ -68,7 +79,7 @@ const registerUser = async (req, res) => {
 
         await transporter.sendMail(mailOptions);
 
-        // 4. Return the access token to the frontend application memory
+        // 5. Return the access token in JSON body for frontend header compatibility
         res.json({ success: true, token: accessToken })
 
     } catch (error) {
@@ -100,15 +111,19 @@ const loginUser = async (req, res) => {
                 expiresIn: '7d',
             });
 
-            // 3. Store the Refresh Token in a secure, httpOnly cookie
-            res.cookie("refreshToken", refreshToken, {
-                httpOnly: true,
-                secure: process.env.NODE_ENV === "production",
-                sameSite: process.env.NODE_ENV === "production" ? "none" : "strict",
-                maxAge: 7 * 24 * 60 * 60 * 1000,
+            // 3. Store the Access Token in a short-lived cookie
+            res.cookie("token", accessToken, {
+                ...cookieOptions,
+                maxAge: 15 * 60 * 1000, // 15 mins
             });
 
-            // 4. Return the access token
+            // 4. Store the Refresh Token in a secure, httpOnly cookie
+            res.cookie("refreshToken", refreshToken, {
+                ...cookieOptions,
+                maxAge: 7 * 24 * 60 * 60 * 1000, // 7 days
+            });
+
+            // 5. Return the access token in JSON body
             res.json({ success: true, token: accessToken })
         }
         else {
@@ -126,12 +141,12 @@ const tokenRefresh = async (req, res) => {
         const refreshToken = req.cookies.refreshToken;
 
         if (!refreshToken) {
-            return res.json({ success: false, message: "Session expired. Please login again." });
+            return res.status(401).json({ success: false, message: "Session expired. Please login again." });
         }
 
         jwt.verify(refreshToken, process.env.JWT_REFRESH_SECRET || process.env.JWT_SECRET, (err, decoded) => {
             if (err) {
-                return res.json({ success: false, message: "Invalid session. Please login again." });
+                return res.status(401).json({ success: false, message: "Invalid session. Please login again." });
             }
 
             // Generate a fresh short-lived access token
@@ -139,23 +154,26 @@ const tokenRefresh = async (req, res) => {
                 expiresIn: '15m',
             });
 
+            // Update the short-lived access cookie as well
+            res.cookie("token", newAccessToken, {
+                ...cookieOptions,
+                maxAge: 15 * 60 * 1000, // 15 mins
+            });
+
             res.json({ success: true, token: newAccessToken });
         });
 
     } catch (error) {
         console.log(error);
-        res.json({ success: false, message: error.message });
+        res.status(500).json({ success: false, message: error.message });
     }
 };
 
 // API to log out the user and clear cookies
 const logoutUser = async (req, res) => {
     try {
-        res.clearCookie("refreshToken", {
-            httpOnly: true,
-            secure: process.env.NODE_ENV === "production",
-            sameSite: process.env.NODE_ENV === "production" ? "none" : "strict",
-        });
+        res.clearCookie("token", cookieOptions);
+        res.clearCookie("refreshToken", cookieOptions);
         res.json({ success: true, message: "Logged out successfully" });
     } catch (error) {
         res.json({ success: false, message: error.message });
@@ -164,7 +182,11 @@ const logoutUser = async (req, res) => {
 
 const sendVerifyOtp = async (req, res) => {
     try {
-        const { userId } = req.body;
+        const userId = req.userId || req.body.userId;
+
+        if (!userId) {
+            return res.status(401).json({ success: false, message: "Unauthorized action" });
+        }
 
         const user = await userModel.findById(userId);
 
@@ -196,16 +218,17 @@ const sendVerifyOtp = async (req, res) => {
 
 // Verify the Email using the OTP
 const verifyEmail = async (req, res) => {
-    const { userId, otp } = req.body;
-
-    if (!userId || !otp) {
-        return res.json({
-            success: false,
-            message: "Missing details",
-        });
-    }
-
     try {
+        const userId = req.userId || req.body.userId;
+        const { otp } = req.body;
+
+        if (!userId || !otp) {
+            return res.json({
+                success: false,
+                message: "Missing details",
+            });
+        }
+
         const user = await userModel.findById(userId);
 
         if (!user) {
@@ -301,7 +324,7 @@ const forgotPassword = async (req, res) => {
             from: process.env.SENDER_EMAIL,
             to: user.email,
             subject: "Reset Password OTP",
-            text: `Your OTP is ${otp}. for change your password.`,
+            text: `Your OTP is ${otp} to change your password.`,
         };
 
         await transporter.sendMail(mailOptions);
@@ -345,9 +368,13 @@ const resetPassword = async (req, res) => {
 // API to get user profile data
 const getProfile = async (req, res) => {
     try {
-        const { userId } = req.body
-        const userData = await userModel.findById(userId).select('-password')
+        const userId = req.userId || req.body.userId;
+        
+        if (!userId) {
+            return res.status(401).json({ success: false, message: "Unauthorized action" });
+        }
 
+        const userData = await userModel.findById(userId).select('-password')
         res.json({ success: true, userData })
 
     } catch (error) {
@@ -359,8 +386,13 @@ const getProfile = async (req, res) => {
 // API to update user profile
 const updateProfile = async (req, res) => {
     try {
-        const { userId, name, phone, address, dob, gender } = req.body
-        const imageFile = req.file
+        const userId = req.userId || req.body.userId;
+        const { name, phone, address, dob, gender } = req.body;
+        const imageFile = req.file;
+
+        if (!userId) {
+            return res.status(401).json({ success: false, message: "Unauthorized action" });
+        }
 
         if (!name || !phone || !dob || !gender) {
             return res.json({ success: false, message: "Data Missing" })
@@ -387,7 +419,13 @@ const updateProfile = async (req, res) => {
 // API to book appointment 
 const bookAppointment = async (req, res) => {
     try {
-        const { userId, docId, slotDate, slotTime, } = req.body
+        const userId = req.userId || req.body.userId;
+        const { docId, slotDate, slotTime } = req.body;
+
+        if (!userId) {
+            return res.status(401).json({ success: false, message: "Unauthorized action" });
+        }
+
         const docData = await doctorModel.findById(docId).select("-password")
 
         if (!docData.available) {
@@ -396,7 +434,7 @@ const bookAppointment = async (req, res) => {
         
         let slots_booked = docData.slots_booked
 
-        // checking for slot availablity 
+        // checking for slot availability 
         if (slots_booked[slotDate]) {
             if (slots_booked[slotDate].includes(slotTime)) {
                 return res.json({ success: false, message: 'Slot Not Available' })
@@ -450,7 +488,13 @@ const bookAppointment = async (req, res) => {
 // API to cancel appointment
 const cancelAppointment = async (req, res) => {
     try {
-        const { userId, appointmentId } = req.body
+        const userId = req.userId || req.body.userId;
+        const { appointmentId } = req.body;
+
+        if (!userId) {
+            return res.status(401).json({ success: false, message: "Unauthorized action" });
+        }
+
         const appointmentData = await appointmentModel.findById(appointmentId)
 
         // verify appointment user 
@@ -482,7 +526,12 @@ const cancelAppointment = async (req, res) => {
 // API to get user appointments for frontend my-appointments page
 const listAppointment = async (req, res) => {
     try {
-        const { userId } = req.body
+        const userId = req.userId || req.body.userId;
+
+        if (!userId) {
+            return res.status(401).json({ success: false, message: "Unauthorized action" });
+        }
+
         const appointments = await appointmentModel.find({ userId })
 
         res.json({ success: true, appointments })
